@@ -1,65 +1,71 @@
 import streamlit as st
+
 st.set_page_config(
     page_title="Fake Review Detection - Prediction",
     page_icon="🤖",
-    layout="wide"
+    layout="wide",
 )
 
 import os
-# Set NLTK_DATA to a writable directory (/tmp/nltk_data)
-os.environ["NLTK_DATA"] = "/tmp/nltk_data"
+import sys
 
-import nltk
-# Create the directory if it doesn't exist
-os.makedirs("/tmp/nltk_data", exist_ok=True)
-# Add /tmp/nltk_data to nltk.data.path so it can find downloaded resources
-nltk.data.path.insert(0, "/tmp/nltk_data")
+# ---------------------------------------------------------------------------
+# Make sure the project root is on sys.path so ``from src.*`` imports work
+# regardless of the working directory (local dev, Docker, Streamlit Cloud).
+# ---------------------------------------------------------------------------
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_APP_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-# Download required NLTK data if not already present
-try:
-    nltk.data.find("tokenizers/punkt/english.pickle")
-except LookupError:
-    nltk.download("punkt", download_dir="/tmp/nltk_data", quiet=True)
-try:
-    nltk.data.find("taggers/averaged_perceptron_tagger")
-except LookupError:
-    nltk.download("averaged_perceptron_tagger", download_dir="/tmp/nltk_data", quiet=True)
+# Download/verify NLTK data before any module that touches the corpora.
+from src.nltk_setup import setup_nltk
+
+setup_nltk()
 
 import warnings
+
 from sklearn.exceptions import ConvergenceWarning
+
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
+
 import joblib
 import numpy as np
 import pandas as pd
 import altair as alt
-import re
-import string
-import matplotlib.pyplot as plt
-from textblob import TextBlob
-from wordcloud import WordCloud
 
-# -------------------------------
+from src.preprocessing import preprocess_text
+from src.features import extract_feature_vector, MODEL_PKL_FEATURE_ORDER
+
+# Number of numeric features the legacy model.pkl was trained on.
+_N_NUMERIC = len(MODEL_PKL_FEATURE_ORDER)  # 11
+
+
+# ---------------------------------------------------------------------------
 # Load Model & Vectorizer
-# -------------------------------
+# ---------------------------------------------------------------------------
 @st.cache_resource
 def load_model_vectorizer():
-    base_dir = os.path.dirname(__file__)
-    model_path = os.path.join(base_dir, "model.pkl")
-    vectorizer_path = os.path.join(base_dir, "tfidf_vectorizer.pkl")
+    model_path = os.path.join(_APP_DIR, "model.pkl")
+    vectorizer_path = os.path.join(_APP_DIR, "tfidf_vectorizer.pkl")
     if not os.path.exists(model_path) or not os.path.exists(vectorizer_path):
-        st.error("Model files not found. Please ensure 'model.pkl' and 'tfidf_vectorizer.pkl' exist in the app directory.")
+        st.error(
+            "Model files not found.  Please ensure 'model.pkl' and "
+            "'tfidf_vectorizer.pkl' exist in the src/ directory."
+        )
         return None, None
     m = joblib.load(model_path)
     v = joblib.load(vectorizer_path)
     return m, v
 
+
 model, vectorizer = load_model_vectorizer()
 if model is None or vectorizer is None:
     st.stop()
 
-# -------------------------------
-# Single Prediction Section
-# -------------------------------
+# ---------------------------------------------------------------------------
+# Single Prediction
+# ---------------------------------------------------------------------------
 st.title("Fake Review Detection - Single Prediction")
 
 review_text = st.text_area("Enter review text:", height=150)
@@ -70,9 +76,19 @@ if st.button("Predict"):
         st.error("Please enter some text.")
     else:
         with st.spinner("Analyzing..."):
-            x_text = vectorizer.transform([review_text])
-            dummy = np.zeros((1, 11))
-            feats = np.hstack((x_text.toarray(), dummy))
+            # 1. Pre-process exactly as during training (lemmatization pipeline)
+            processed = preprocess_text(review_text)
+            x_tfidf = vectorizer.transform([processed])
+
+            # 2. Extract the 11 numeric features the model was trained on
+            #    (everything in FEATURE_ORDER except punctuation_count).
+            numeric = extract_feature_vector(review_text)[:_N_NUMERIC].reshape(
+                1, -1
+            )
+
+            # 3. Combine sparse TF-IDF + dense numeric features
+            feats = np.hstack((x_tfidf.toarray(), numeric))
+
             try:
                 probabilities = model.predict_proba(feats)[0]
             except Exception:
@@ -80,17 +96,28 @@ if st.button("Predict"):
                 prediction = model.predict(feats)[0]
             else:
                 prediction = 1 if probabilities[1] >= threshold else 0
-            result = "Computer generated" if prediction == 0 else "Original"
+
+            result = "Computer Generated" if prediction == 0 else "Original"
             st.success(f"Prediction: {result}")
+
             if probabilities is not None:
-                data = {
-                    "Label": ["Computer Generated", "Original"],
-                    "Probability": [probabilities[0], probabilities[1]]
-                }
-                # Create DataFrame using pandas (ensure import pandas as pd is present)
-                df_probs = pd.DataFrame(data)
-                bar_chart = alt.Chart(df_probs).mark_bar(color="#66b3ff").encode(
-                    x=alt.X("Label", axis=alt.Axis(labelAngle=0)),
-                    y="Probability"
-                ).properties(title="Prediction Probability Distribution", width=300, height=400)
+                df_probs = pd.DataFrame(
+                    {
+                        "Label": ["Computer Generated", "Original"],
+                        "Probability": [probabilities[0], probabilities[1]],
+                    }
+                )
+                bar_chart = (
+                    alt.Chart(df_probs)
+                    .mark_bar(color="#66b3ff")
+                    .encode(
+                        x=alt.X("Label", axis=alt.Axis(labelAngle=0)),
+                        y="Probability",
+                    )
+                    .properties(
+                        title="Prediction Probability Distribution",
+                        width=300,
+                        height=400,
+                    )
+                )
                 st.altair_chart(bar_chart, use_container_width=True)

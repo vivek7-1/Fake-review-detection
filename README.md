@@ -14,6 +14,39 @@ Welcome to the comprehensive documentation for our Fake Review Detection project
 
 ---
 
+## Labels
+
+Raw labels in `Data/Raw/fakeReviewData.csv` are `CG` and `OR`. Encoding (same as sklearn `LabelEncoder`) is:
+
+- `0` = **Computer Generated** (`CG`)
+- `1` = **Original** (`OR`)
+
+The Streamlit app uses this mapping.
+
+## Final production pipeline
+
+Do not use `src/model.pkl`, `src/tfidf_vectorizer.pkl`, or `src/temp.py`. Train and serve one sklearn pipeline:
+
+```
+python -m src.train
+streamlit run src/app.py
+python -c "from src.predict import predict_review; print(predict_review('Love this! Well made and comfortable.'))"
+```
+
+Flow:
+
+```
+original review
+  ├─> style/numeric features (including punctuation_count)
+  └─> preprocess_text (no spell-correction) -> TF-IDF
+        └─> StandardScaler on numeric (train-fitted)
+              └─> LogisticRegression
+```
+
+TF-IDF and the scaler are fit on the **training split only** (80/20, `random_state=42`, stratified). Metrics are written to `models/metrics.json`. The ~91% row in `Notebooks/progress_log.csv` is an older TF-IDF experiment and is not this pipeline.
+
+Historical notebooks (N0–N6) are kept for experiment history. N4/N5 still contain leakage if re-run as-is; production training is `src/train.py`.
+
 ## Table of Contents
 
 1. [Project Overview](#project-overview)

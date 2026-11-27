@@ -1,14 +1,15 @@
-import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
-import joblib
+"""Deprecated.
 
-df = pd.read_csv("../Data/Feature-Engineered/preprocessed_lemmatization_features.csv")
+The production vectorizer lives inside models/fake_review_pipeline.pkl.
+Do not fit a standalone TfidfVectorizer on the full dataset.
 
-texts = df["processed_text"].dropna().astype(str).tolist()
+Train the real pipeline:
 
-vectorizer = TfidfVectorizer(max_features=5000)
-vectorizer.fit(texts)
+    python -m src.train
+"""
 
-joblib.dump(vectorizer, "tfidf_vectorizer.pkl")
-
-print("tfidf_vectorizer.pkl created successfully.")
+raise SystemExit(
+    "src/temp.py is deprecated. It used to fit TF-IDF on all rows and save "
+    "tfidf_vectorizer.pkl, which caused train/serve mismatch. "
+    "Run: python -m src.train"
+)
